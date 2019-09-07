@@ -640,33 +640,6 @@ class SensorQuery:
 ##
 
 
-def format_cmd_rfnano(cmd, wake_up=0):
-    global pulse_wake_up
-    MASK_SIZE        = 0b00011111
-    MASK_WAKE_UP     = 0b00100000
-    RF_NANO_PAYLOAD = 32
-    if type(cmd) is list:
-        tmp = ""
-        for c in cmd:
-            if type(c) is int:
-                tmp+= chr(c)
-            elif type(c) is str:
-                tmp += c
-            else:
-                raise RuntimeError("invalid type")
-        cmd = tmp
-    ibit = len(cmd)
-    if wake_up:
-        ibit |= MASK_WAKE_UP
-    ret = chr(ibit)+cmd+chr(0)*(RF_NANO_PAYLOAD-len(cmd)-2)
-    ret += chr(checksum(ret))
-    return ret
-
-    
-def simple_command(cmd):
-    return format_cmd_rfnano(MC_START+cmd+MC_STOP)
-
-
 def checksum(data):
     return (sum([ord(x) for x in data]) & 0xff)# ^ 0xff
 
@@ -675,118 +648,6 @@ def checksum(data):
 ## Operetional Commands
 ##
 
-def test():
-    print "test"
-    messages = [SensorPacket_BumpsAndWheelDrops(),SensorPacket_Wall(),SensorPacket_CliffLeft(),SensorPacket_CliffFrontLeft(),
-        SensorPacket_CliffFrontRight(),SensorPacket_CliffRight(),SensorPacket_VirtualWall(),SensorPacket_WheelOvercurrents(),
-        SensorPacket_DirtDetect(),SensorPacket_InfraredCharacterOmni(),SensorPacket_InfraredCharacterLeft(),
-        SensorPacket_InfraredCharacterRight(),SensorPacket_Buttons(),SensorPacket_Distance(),SensorPacket_Angle(),
-        SensorPacket_ChargingState(),SensorPacket_Voltage(),SensorPacket_Current(),SensorPacket_Temperature(),
-        SensorPacket_BatteryCharge(),SensorPacket_BatteryCapacity(),SensorPacket_WallSignal(),SensorPacket_CliffLeftSignal(),
-        SensorPacket_CliffFrontLeftSignal(),SensorPacket_CliffFrontRightSignal(),SensorPacket_CliffRightSignal(),
-        SensorPacket_ChargingSourcesAvailable(),SensorPacket_OIMode(),SensorPacket_SongNumber(),SensorPacket_SongPlaying(),
-        SensorPacket_NumberOfStreamPackets(),SensorPacket_RequestedVelocity(),SensorPacket_RequestedRadius(),
-        SensorPacket_RequestedRightVelocity(),SensorPacket_RequestedLeftVelocity(),SensorPacket_LeftEncoderCounts(),
-        SensorPacket_RightEncoderCounts(),SensorPacket_LightBumpSignal(),SensorPacket_LightBumpLeftSignal(),
-        SensorPacket_LightBumpFrontLeftSignal(),SensorPacket_LightBumpCenterLeftSignal(),SensorPacket_LightBumpCenterRightSignal(),
-        SensorPacket_LightBumpFrontRightSignal(),SensorPacket_LightBumpRightSignal(),SensorPacket_LeftMotorCurrent(),
-        SensorPacket_RightMotorCurrent(),SensorPacket_MainBrushMotorCurrent(),SensorPacket_SideBrushMotorCurrent(),
-        SensorPacket_Stasis(),
-        ]
-    sm = SensorStream()
-    for m in messages:
-        sm.add(m)
-    with get_socket() as socket:
-        socket.write(MC_START)
-        sm.set_stream(socket)
-        sm.send_request()
-        sm.read_response()
-        for packet in sm.get_packets():
-            print "%s: %s (%r)" % (packet.name, packet.get(), packet.value)
-        sm.toggle_stream()
-
-def check_battery():
-    print "check battery"
-    messages = [
-        SensorPacket_ChargingState(),
-        SensorPacket_Voltage(),
-        SensorPacket_Current(),
-        SensorPacket_Temperature(),
-        SensorPacket_BatteryCharge(),
-        SensorPacket_BatteryCapacity(),
-        ]
-    sm = SensorStream()
-    for m in messages:
-        sm.add(m)
-
-    with get_socket() as socket:
-        socket.write(MC_START)
-        sm.set_stream(socket)
-        sm.send_request()
-        for n in xrange(3):
-            sm.read_response()
-            print "-"*20
-            for packet in sm.get_packets():
-                print "%s: %s (%r)" % (packet.name, packet.get(), packet.value)
-            print "Battery state: %.1f%%" % (messages[4].value/float(messages[5].value)*100,)
-            print
-            # a clunky sleep can cause stream to go out of sync, todo calculate time elapsed to get correct sleep duration.
-            time.sleep(STREAM_INTERVAL) 
-        sm.toggle_stream()
-
-
-
-def change_baudrate(baudrate):
-    print "changing baudrate to ", baudrate
-    '''
-    time.sleep(2)
-    gpio.setmode(gpio.BCM)
-    gpio.setup(baud_pin, gpio.OUT)
-    for x in xrange(3):
-        gpio.output(baud_pin, gpio.HIGH)
-        time.sleep(0.05)
-        gpio.output(baud_pin, gpio.LOW)
-    gpio.cleanup()
-    '''
-    with serial.Serial(device, baudrate=115200, timeout=timeout) as port:
-        port.write(MC_START)
-        time.sleep(0.015)
-        port.write(MC_BAUD + chr(baudrates.index(baudrate)))
-        port.flush()
-    time.sleep(0.1)
-
-
-def wake_up():
-    '''
-    uses gpio, physical connection to baude pin required
-    Warning: calling this funtion repeatedly might cause a change to baude rate.
-    '''
-    print "wake from sleep"
-    gpio.setmode(gpio.BCM)
-    gpio.setup(baud_pin, gpio.OUT)
-    gpio.output(baud_pin, gpio.LOW)
-    gpio.cleanup()
-    time.sleep(1)
-
-def start():
-    simple_command(MC_START)
-
-def reset():
-    print "resetting roomba"
-    simple_command(MC_RESET)
-
-def stop():
-    print "stop"
-    with get_socket() as port:
-        port.write(MC_STOP)
-
-def safe():
-    with get_socket() as port:
-        port.write(CC_SAFE)
-
-def full():
-    with get_socket() as port:
-        port.write(CC_FULL)
 
 def set_schedule():
     data = [
@@ -799,9 +660,7 @@ def set_schedule():
         10, 0, # fri
         0, 0,  # sat
         ]
-    data = "".join([chr(x) for x in data])
-    print("setting schedule to:", data)
-    simple_command(CC_SCHEDULE+data)
+    return CC_SCHEDULE+"".join([chr(x) for x in data])
 
 
 def update_clock():
@@ -810,27 +669,8 @@ def update_clock():
     day = gmt.tm_wday + 1 if gmt.tm_wday != 6 else 0
     hour = gmt.tm_hour
     minute = gmt.tm_min
-    cmd = "".join([CC_SET_TIME, chr(day), chr(hour), chr(minute)])
-    print("set time to: %s day, %s hour, %s minute" % (day, hour, minute))
-    simple_command(cmd)
+    return "".join([CC_SET_TIME, chr(day), chr(hour), chr(minute)])
 
-
-def clean():
-    simple_command(CC_CLEAN)
-
-
-def dock():
-    simple_command(CC_SEEK_DOCK)
-        
-
-def stop_stream():
-    print "stop stream"
-    simple_command(IC_PAUSE_RESUME_STREAM + chr(0))
-
-def power_down():
-    print "power down"
-    return CC_POWER
-    
 
 def drive(velocity, angle):
     '''
@@ -841,9 +681,6 @@ def drive(velocity, angle):
         raise RuntimeError("velocity out of range")
     if not (-2000 <= angle <= 2000):
         raise RuntimeError("angle out of range")
-    cmd = MC_START
-    #cmd += CC_FULL
-    cmd += CC_SAFE
     if velocity < 0:
         velocity += (2**16)&0xffff
     s_velocity = chr(velocity>>8&0xff) + chr(velocity&0xff)
@@ -851,7 +688,6 @@ def drive(velocity, angle):
         angle += (2**16)&0xffff
     s_angle = (chr(angle>>8&0xff) + chr(angle&0xff))
     return AC_DRIVE + s_velocity + s_angle
-    return cmd
 
 
 def motors(*motors):
@@ -868,158 +704,3 @@ def motors(*motors):
         b += m<<i
     return AC_MOTORS + chr(b)
 
-    
-import select
-import tty
-import termios
-def joy_ride():
-    print "going for a joy ride"
-    def isData():
-        return select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], [])
-        
-    import nrf24
-    
-    radio = nrf24.NRF24()
-    radio.begin(0, 0, 25, None) #Set CE and IRQ pins
-    w_pipe = [0x46, 0x47, 0x48, 0x49, 0x4a]
-    radio.setPayloadSize(32)
-    radio.setRetries(10,50)
-    radio.setChannel(108)
-    radio.openWritingPipe(w_pipe)
-    radio.stopListening()
-    radio.printDetails()
-    wake_up = False
-    if pulse_wake_up:
-        wake_up = True
-    radio.write(format_cmd_rfnano(MC_START, wake_up))
-        
-    v = 0
-    a = 0
-    do_clean = 1
-
-    old_settings = termios.tcgetattr(sys.stdin)
-    try:
-        tty.setcbreak(sys.stdin.fileno())
-        while 1:
-            if isData():
-                cmd = ""
-                c = sys.stdin.read(1)
-                if c == '\x1b':         # x1b is ESC
-                    break
-                elif c == 'w':
-                    print 'forward'
-                    v += 100
-                    cmd = drive(v, a)
-                elif c == 's':
-                    print 'backward'
-                    v -= 100
-                    cmd = drive(v, a)
-                elif c == 'a':
-                    print 'left'
-                    a += 100
-                    cmd = drive(v, a)
-                elif c == 'd':
-                    print 'right'
-                    a -= 100
-                    cmd = drive(v, a)
-                elif c == ' ':
-                    if do_clean:
-                        print 'clean'
-                        cmd = motors(1, 1, 1, 1, 1)
-                        do_clean = 0
-                    else:
-                        print 'no clean'
-                        cmd = motors(0, 0, 0, 0, 0)
-                        do_clean = 1
-                if cmd:
-                    cmd = format_cmd_rfnano(cmd)
-                    print "cmd ", ["%x"%ord(c) for c in cmd]
-                    t = time.time()
-                    print radio.write(cmd)
-                    print "%dms" % ((time.time()-t)*1000, )
-        radio.write(format_cmd_rfnano(power_down()))
-    finally:
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-
-def sound():
-    import nrf24
-    
-    t = 1
-    
-    radio = nrf24.NRF24()
-    radio.begin(0, 0, 25, None) #Set CE and IRQ pins
-    w_pipe = [0x46, 0x47, 0x48, 0x49, 0x4a]
-    radio.setPayloadSize(32)
-    radio.setRetries(10,50)
-    radio.setChannel(108)
-    radio.openWritingPipe(w_pipe)
-    radio.stopListening()
-    radio.printDetails()
-    wake_up = False
-    if pulse_wake_up:
-        wake_up = True
-        
-    cmd = MC_START + CC_SAFE
-    print radio.write(format_cmd_rfnano(cmd, wake_up))
-    time.sleep(0.1)
-
-    b = 40
-    t = 8
-    cmd = [ 
-        AC_SONG, 0, None,
-        b, t,
-        b+12*2, t,
-        b, t,
-        b+12, t,
-        b, t,
-        b+12, t,
-        b+12*2, t,
-        ]
-    cmd[2] = (len(cmd)-3)/2
-    print "{",
-    print ','.join(["0x%x" % ord(c) for c in format_cmd_rfnano(cmd)]),
-    print "}"
-    print radio.write(format_cmd_rfnano(cmd))
-    
-    cmd = [AC_PLAY, 0]
-    print radio.write(format_cmd_rfnano(cmd))
-    time.sleep(3)
-    
-    print radio.write(format_cmd_rfnano(CC_POWER))
-    radio.end()
-
-        
-def main():
-    #test_joyride()
-    #reset()
-    #check_battery()
-    if len(sys.argv) > 1:
-        print sys.argv
-        if 'wakeup' in sys.argv:
-            print "wake up"
-            global pulse_wake_up
-            pulse_wake_up = 1
-
-        c = sys.argv[1]
-        if c == '0':
-            power_down()
-        elif c == 'joyride':
-            joy_ride()
-        elif c == 'clean':
-            clean()
-        elif c == 'wakeup':
-            start()
-        elif c == 'sound':
-            sound()
-        
-    
-    #update_clock()
-    #set_schedule()
-    #test()
-    #stop_stream()
-    #dock()
-    
-
-
-if __name__ == '__main__':
-    main()

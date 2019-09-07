@@ -3,10 +3,16 @@ import nrf24
 import sys
 import time
 import StringIO
+import threading
+import select
+import tty
+import termios
 
 from roomba import *
 
 MASK_WAKE_UP     = 0b00100000
+MASK_SIZE        = 0b00011111
+RF_NANO_PAYLOAD = 32
 
 w_pipe = [0x46, 0x47, 0x48, 0x49, 0x4a]
 r_pipe = [0x41, 0x42, 0x43, 0x44, 0x45]
@@ -14,6 +20,7 @@ ce_pin = 25
 irq_pin = None
 retries = 10
 
+SensorMessage_islive = True
 radio = None
 
 def SetupRadio():
@@ -32,10 +39,13 @@ def SetupRadio():
     radio.openWritingPipe(r_pipe)
     radio.openReadingPipe(1, w_pipe)
     radio.startListening()
-    radio.printDetails()
+    #radio.printDetails()
     return radio
 
+
 def SensorMessages():
+    global SensorMessage_islive
+    SensorMessage_islive = True
     sm = SensorQuery()
     sm.add( 
             #SM_CHARGING_STATE,
@@ -58,27 +68,28 @@ def SensorMessages():
     sys.stdout.write('\n' + '='*20 + '\n')
     sys.stdout.write('\n'*lines)
     def loop():
-        try:
-            if radio.available():
-                ret = []
-                radio.read(ret, radio.getDynamicPayloadSize()),
-                old_pos = msg_buff.pos
-                msg_buff.write(''.join(chr(c) for c in ret))
-                msg_buff.seek(old_pos)
-                available = msg_buff.len-msg_buff.pos
-                if available >= sm.get_response_size():
-                    packets = sm.parse_from_stream(msg_buff)
-                    if packets:
-                        sys.stdout.write( '\033[%dA' % (lines,) )
-                        print time.time()-t
-                        for id, packet in packets.iteritems():
-                            print "%s: %s (%r)" % (packet.name, packet.get(), packet.value)
-                        print "Battery state: %.1f%%" % (packets[SM_BATTERY_CHARGE].value/float(packets[SM_BATTERY_CAPACITY].value)*100,)
-                        print
-                sys.stdout.flush()
-        except KeyboardInterrupt:
-            pass
-    return loop
+        while SensorMessage_islive:
+            try:
+                if radio.available():
+                    ret = []
+                    radio.read(ret, radio.getDynamicPayloadSize()),
+                    old_pos = msg_buff.pos
+                    msg_buff.write(''.join(chr(c) for c in ret))
+                    msg_buff.seek(old_pos)
+                    available = msg_buff.len-msg_buff.pos
+                    if available >= sm.get_response_size():
+                        packets = sm.parse_from_stream(msg_buff)
+                        if packets:
+                            sys.stdout.write( '\033[%dA' % (lines,) )
+                            print "time eleapsed: %ds" % (time.time()-t,)
+                            for id, packet in packets.iteritems():
+                                print "%s: %s (%r)" % (packet.name, packet.get(), packet.value)
+                            print "Battery state: %.1f%%" % (packets[SM_BATTERY_CHARGE].value/float(packets[SM_BATTERY_CAPACITY].value)*100,)
+                            print
+                    sys.stdout.flush()
+            except KeyboardInterrupt:
+                pass
+    return threading.Thread(target=loop)
 
 def listen():
     radio.openWritingPipe(r_pipe)
@@ -94,9 +105,6 @@ def checksum(data):
     return (sum([ord(x) for x in data]) & 0xff) ^ 0xff
 
 def format_cmd_rfnano(cmd, wake_up=0):
-    MASK_SIZE        = 0b00011111
-    MASK_WAKE_UP     = 0b00100000
-    RF_NANO_PAYLOAD = 32
     if type(cmd) is list:
         tmp = ""
         for c in cmd:
@@ -114,18 +122,17 @@ def format_cmd_rfnano(cmd, wake_up=0):
     ret += chr(checksum(ret))
     return ret
 
-def radio_out(cmd, wakeup=0, retries=1):
+def radio_out(cmd, wakeup=0, retries=10):
     out_cmd = format_cmd_rfnano(cmd, wakeup)
-    #print "cmd:", [ord(c) for c in out_cmd], 
     talk()
     for n in xrange(retries):
         r = radio.write(out_cmd)
         if r:
             break
+        time.sleep(0.015)
     listen()
     if not r:
-        print "roomba not responding"
-        exit()
+        raise RuntimeError("roomba not responding")
     time.sleep(0.5)
     return r
 
@@ -133,7 +140,7 @@ def radio_out(cmd, wakeup=0, retries=1):
 def wakeup():
     radio_out(MC_START, 1)
 
-def kill():
+def power():
     radio_out(MC_START + CC_POWER)
 
 def reset():
@@ -155,20 +162,19 @@ def stop():
 def dock():
     radio_out([MC_START, CC_SEEK_DOCK])
 
-import select
-import tty
-import termios
 def joy_ride():
     print "going for a joy ride"
+    global SensorMessage_islive
     def isData():
         return select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], [])
 
     radio_out([MC_START, CC_FULL], 1)
-    loop = SensorMessages()
+    thread = SensorMessages()
+    thread.start()
     v = 0
     a = 0
     do_clean = 1
-
+    v_inc = (500/3)-1
     old_settings = termios.tcgetattr(sys.stdin)
     try:
         tty.setcbreak(sys.stdin.fileno())
@@ -180,18 +186,20 @@ def joy_ride():
                     break
                 elif c == 'w':
                     if v <= 400:
-                        v += 100
+                        v += v_inc
                         cmd = drive(v, a)
                 elif c == 's':
                     if -400 <= v:
-                        v -= 100
+                        v -= v_inc
                         cmd = drive(v, a)
                 elif c == 'a':
-                    a += 100
-                    cmd = drive(v, a)
+                    if a < 1:
+                        a += 1
+                        cmd = drive(v, a)
                 elif c == 'd':
-                    a -= 100
-                    cmd = drive(v, a)
+                    if a > -1: 
+                        a -= 1
+                        cmd = drive(v, a)
                 elif c == ' ':
                     if do_clean:
                         cmd = motors(1, 1, 1, 1, 1)
@@ -200,10 +208,14 @@ def joy_ride():
                         cmd = motors(0, 0, 0, 0, 0)
                         do_clean = 1
                 if cmd:
-                    radio_out(cmd)
-                loop()
-        radio_out([MC_START,])
+                    try:
+                        radio_out(cmd)
+                    except RuntimeError:
+                        print 'roomba not responding'
+
     finally:
+        SensorMessage_islive = False
+        radio_out([MC_START,])
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
 
@@ -257,9 +269,11 @@ def parse_args():
     elif c == 'sync':
         update_clock()
         set_schedule()
-        
-        
-    exit()
+    elif c == 'reset':
+        reset()
+    elif c == 'power':
+        power()
+    sys.exit()
 
 
 def main():
@@ -267,7 +281,6 @@ def main():
     radio = SetupRadio()
     
     parse_args()
-    #test()
     joy_ride()
 
 if __name__ == '__main__':
