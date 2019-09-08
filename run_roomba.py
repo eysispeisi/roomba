@@ -162,6 +162,9 @@ def stop():
 def dock():
     radio_out([MC_START, CC_SEEK_DOCK])
 
+def clean():
+    radio_out([MC_START, CC_CLEAN])
+    
 def joy_ride():
     print "going for a joy ride"
     global SensorMessage_islive
@@ -273,6 +276,8 @@ def parse_args():
         reset()
     elif c == 'power':
         power()
+    elif c == 'clean':
+        clean()
     sys.exit()
 
 
