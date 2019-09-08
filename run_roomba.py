@@ -123,8 +123,13 @@ def format_cmd_rfnano(cmd, wake_up=0):
     return ret
 
 def radio_out(cmd, wakeup=0, retries=10):
-    out_cmd = format_cmd_rfnano(cmd, wakeup)
     talk()
+    if wakeup:
+        for n in xrange(retries):
+            if radio.write( format_cmd_rfnano([MC_START,], 1) ):
+                break
+        time.sleep(1)
+    out_cmd = format_cmd_rfnano(cmd)
     for n in xrange(retries):
         r = radio.write(out_cmd)
         if r:
@@ -135,10 +140,6 @@ def radio_out(cmd, wakeup=0, retries=10):
         raise RuntimeError("roomba not responding")
     time.sleep(0.5)
     return r
-
-
-def wakeup():
-    radio_out(MC_START, 1)
 
 def power():
     radio_out(MC_START + CC_POWER)
@@ -160,10 +161,10 @@ def stop():
     radio_out([MC_START, MC_STOP])
 
 def dock():
-    radio_out([MC_START, CC_SEEK_DOCK])
+    radio_out([MC_START, CC_SEEK_DOCK], 1)
 
 def clean():
-    radio_out([MC_START, CC_CLEAN])
+    radio_out([MC_START, CC_CLEAN], 1)
     
 def joy_ride():
     print "going for a joy ride"
