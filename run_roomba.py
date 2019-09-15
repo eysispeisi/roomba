@@ -26,20 +26,13 @@ radio = None
 def SetupRadio():
     radio = nrf24.NRF24()
     radio.begin(0, 0, ce_pin, irq_pin) #Set CE and IRQ pins
-    radio.setRetries(15,15)
-    radio.setPayloadSize(32)
-    radio.setChannel(108)
     radio.setDataRate(radio.BR_2MBPS)
     radio.enableDynamicPayloads()
-    #radio.setAutoAck(True)
-    #radio.setAutoAck(False)
-    #radio.setCRCLength(radio.CRC_16)
-    radio.setPALevel(nrf24.NRF24.PA_MAX)
-
+    radio.setChannel(108)
     radio.openWritingPipe(r_pipe)
     radio.openReadingPipe(1, w_pipe)
     radio.startListening()
-    #radio.printDetails()
+    radio.printDetails()
     return radio
 
 
@@ -206,7 +199,7 @@ def joy_ride():
                         cmd = drive(v, a)
                 elif c == ' ':
                     if do_clean:
-                        cmd = motors(1, 1, 1, 1, 1)
+                        cmd = motors(1, 1, 1, 0, 0)
                         do_clean = 0
                     else:
                         cmd = motors(0, 0, 0, 0, 0)
@@ -215,7 +208,7 @@ def joy_ride():
                     try:
                         radio_out(cmd)
                     except RuntimeError:
-                        print 'roomba not responding'
+                        pass
 
     finally:
         SensorMessage_islive = False
